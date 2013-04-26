@@ -2,7 +2,6 @@ import logging, os, ftplib, datetime
 from urlparse import urlparse
 from flexget.entry import Entry
 from flexget.plugin import register_plugin
-from flexget.utils.cached_input import cached
 
 log = logging.getLogger('ftp')
 
@@ -15,7 +14,12 @@ class OutputFtp(object):
 
 		config:
 		    ftp_download:
+			temp: /tmp  #tmp dir
       			tls: 0 #not used even
+			move: 0
+			unrar: 1
+			exclude: 
+			  - *.zip
 	
 		TODO:
 		  - Resume downloads
@@ -27,8 +31,10 @@ class OutputFtp(object):
 	def validator(self):
 		from flexget import validator
         	root = validator.factory('dict')
-		#root.accept('list', key='banfiles')
+		#root.accept('list', key='exclude')
 		root.accept('integer', key='tls')
+		root.accept('integer', key='move')
+		#root.accept('text', key='temp')
         	return root
 
 	def on_task_download(self, task, config):
@@ -44,7 +50,9 @@ class OutputFtp(object):
 			ftp.sendcmd('TYPE I')
 			ftp.set_pasv(True)
 	
-			tmp_path = os.path.join(task.manager.config_base, 'temp', title)
+			#tmp_path = os.path.join(config['temp'], title);
+			tmp_path = os.path.join(entry.get("temp_down"), title);
+			log.info('temp path %s' % tmp_path)
 			if not os.path.isdir(tmp_path):
 				log.debug('creating tmp_path %s' % tmp_path)
 				os.mkdir(tmp_path)
@@ -76,22 +84,38 @@ class OutputFtp(object):
 		tmpDir = tmp_path #+ "/" + currdir #os.path.join(tmp_path, currdir)
 		if not os.path.exists(tmpDir): os.makedirs(tmpDir)
 		try:
-			with open(os.path.join(tmpDir,fileName), 'wb') as f:
-				def callback(data):
-					f.write(data)
-				ftp.retrbinary('RETR %s' % fileName, callback)
-				f.close()
-				log.info('RETR: '+ os.path.join(tmpDir,fileName))
+			ftp.voidcmd('TYPE I') #para que el ftp.size funcione correctamente
+			tamSrc = ftp.size(fileName)
+			dstFile = os.path.join(tmpDir,fileName)
+			action = 'Download'
+			if os.path.exists(dstFile):
+				#tamDst = os.path.getsize(dstFile)
+				tamDst = os.stat(dstFile).st_size
+				if tamSrc == tamDst:
+					action = 'NoDownload'
+
+			if action == 'Download':
+				with open(os.path.join(tmpDir,fileName), 'wb') as f:
+					def callback(data):
+						f.write(data)
+					ftp.retrbinary('RETR %s' % fileName, callback)
+					f.close()
+					log.info('RETR: '+ os.path.join(tmpDir,fileName))
+				#log.info('RETR: '+ os.path.join(tmpDir,fileName))
+			else:
+				log.info('NoDownload: '+ os.path.join(tmpDir,fileName))
 		except Exception, e:
 			print e
 
 
 	def on_task_output(self, task, config):
+		if config['move'] == 0:
+			return
 		entries = task.accepted
 		for entry in entries:
 			destino = entry.get('path')
 			title = entry.get('title')
-			origen = os.path.join(task.manager.config_base, 'temp', title)
+			origen = os.path.join(config['temp'], title);
 			log.info('Moviendo a destino: '+destino + ' desde ' + origen);
 			import shutil
 			shutil.move(origen, destino)
